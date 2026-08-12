@@ -141,11 +141,12 @@ def setup(cfg: Config) -> Router:
 
     @router.message(Command("topcreators"))
     async def cmd_topcreators(message: Message) -> None:
-        rows = await db.get_top_creators(cfg.db_path)
+        rows = await db.get_top_creators(cfg.db_path, cfg.creator_success_threshold)
         if not rows:
             await message.answer(
-                "Пока нет создателей с успешными запусками. "
-                f"Считается запуск, чей токен набрал ликвидность от ${cfg.discovery_min_liquidity_usd:,.0f}."
+                "Пока нет создателей, набравших нужную историю. "
+                f"Успешным считается запуск, чей токен набрал ликвидность от ${cfg.discovery_min_liquidity_usd:,.0f}, "
+                f"а в список попадают создатели от {cfg.creator_success_threshold} успешных запусков."
             )
             return
         lines = ["Создатели с историей успешных запусков:"]
