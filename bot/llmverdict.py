@@ -24,26 +24,24 @@ def build_prompt(
     risk: "rugcheck.RiskInfo | None",  # noqa: F821
 ) -> str:
     lines = [
-        "Ты аналитик мемкоинов на Solana. На основе ТОЛЬКО приведённых ниже данных дай короткий "
-        "вердикт на русском (1-2 предложения, начни с эмодзи). Не придумывай факты сверх данных и не "
-        "путай направление шкал (ниже указано явно, что означает каждое значение). "
-        "RugCheck score — это уже итоговая композитная оценка риска от RugCheck, учитывающая контекст токена "
-        "(включая то, что LP locked % малозначим для давно устоявшихся токенов с органической ликвидностью). "
-        "Опирайся в первую очередь на score, а не пересчитывай риск заново по отдельным метрикам вроде LP locked. "
-        "Если данных недостаточно для вывода — так и скажи.",
+        "You are a Solana memecoin analyst. Using ONLY the data below, give a short English "
+        "verdict in 1-2 sentences starting with an emoji. Do not invent facts. "
+        "RugCheck score is a composite risk score where 0 is safest and 100 is highest risk. "
+        "If the data is insufficient, say so.",
         "",
-        f"Токен: {name} ({symbol})",
-        f"Цена: ${price_usd}",
-        f"Ликвидность: ${liquidity_usd:,.0f}",
-        f"Объём 24ч: ${volume_h24:,.0f}",
+        f"Token: {name} ({symbol})",
+        f"Price: ${price_usd}",
+        f"Liquidity: ${liquidity_usd:,.0f}",
+        f"24h volume: ${volume_h24:,.0f}",
     ]
     if risk is not None:
-        lines.append(f"RugCheck score риска: {risk.score_normalised:.0f} из 100 (0 = безопасно, 100 = максимальный риск)")
-        lines.append(f"LP locked: {risk.lp_locked_pct:.0f}% (выше = безопаснее, ликвидность заблокирована)")
-        lines.append(f"Freeze authority: {'включён (плохо, могут заморозить твой кошелёк)' if risk.freeze_authority else 'нет (хорошо)'}")
-        lines.append(f"Уже помечен как раг: {'да' if risk.rugged else 'нет'}")
+        lines.append(f"RugCheck risk score: {risk.score_normalised:.0f}/100 (0 = safest, 100 = highest risk)")
+        lines.append(f"LP locked: {risk.lp_locked_pct:.0f}% (higher means more liquidity is locked)")
+        lines.append(f"Freeze authority: {'enabled (bad)' if risk.freeze_authority else 'not detected'}")
+        lines.append(f"Mint authority: {'enabled (bad)' if risk.mint_authority else 'not detected'}")
+        lines.append(f"Already marked rugged: {'yes' if risk.rugged else 'no'}")
         if risk.risk_names:
-            lines.append(f"Флаги риска: {', '.join(risk.risk_names)}")
+            lines.append(f"Risk flags: {', '.join(risk.risk_names)}")
     return "\n".join(lines)
 
 
@@ -88,6 +86,8 @@ async def _get_verdict_api(prompt: str, api_key: str, model: str) -> str | None:
 
 
 async def get_verdict(prompt: str, cfg) -> str | None:
+    if cfg.llm_backend == "off":
+        return None
     if cfg.llm_backend == "api":
         if not cfg.llm_api_key:
             logger.warning("LLM_BACKEND=api but ANTHROPIC_API_KEY is not set")

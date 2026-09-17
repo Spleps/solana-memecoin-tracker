@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from aiogram import Bot
 
-from . import db, dexscreener, discovery, llmverdict, pumpportal, rugcheck
+from . import db, dexscreener, discovery, llmverdict, pumpportal, rugcheck, scoring
 from .config import Config
 from .handlers import format_price, format_usd
 
@@ -40,7 +40,7 @@ async def _notify_known_creator(bot: Bot, cfg: Config, event: dict, creator: str
     symbol = event.get("symbol", "?")
     mint = event.get("mint")
     text = (
-        f"👤 Известный создатель ({success_count} успешных запусков) только что выпустил новый токен\n"
+        f"👤 Known creator ({success_count} successful launches) just launched a new token\n"
         f"{name} ({symbol})\n"
         f"https://pump.fun/coin/{mint}"
     )
@@ -80,15 +80,25 @@ async def _sweep_once(bot: Bot, cfg: Config) -> None:
         pair = pairs.get(addr)
 
         if pair and pair.liquidity_usd >= cfg.discovery_min_liquidity_usd:
+            risk = await rugcheck.get_risk(addr)
+            token_score = scoring.calculate_score(pair, risk)
+            if token_score.value < cfg.minimum_token_score:
+                continue
             if subscribers is None:
                 subscribers = await db.get_feed_subscribers(cfg.db_path)
             await db.mark_candidate_status(cfg.db_path, addr, "alerted")
             if row["creator"]:
                 await db.record_creator_success(cfg.db_path, row["creator"])
-            risk = await rugcheck.get_risk(addr)
-            prompt = llmverdict.build_prompt(pair.name, pair.symbol, pair.price_usd, pair.liquidity_usd, pair.volume_h24, risk)
+            prompt = llmverdict.build_prompt(
+                pair.name,
+                pair.symbol,
+                pair.price_usd,
+                pair.liquidity_usd,
+                pair.volume_h24,
+                risk,
+            )
             verdict = await llmverdict.get_verdict(prompt, cfg)
-            text = _format_new_pair(pair, row["source"], risk, verdict)
+            text = _format_new_pair(pair, row["source"], risk, verdict, token_score)
             for chat_id in subscribers:
                 try:
                     await bot.send_message(chat_id, text)
@@ -103,13 +113,18 @@ async def _sweep_once(bot: Bot, cfg: Config) -> None:
 
 
 def _format_new_pair(
-    pair: dexscreener.PairData, source: str, risk: rugcheck.RiskInfo | None, verdict: str | None
+    pair: dexscreener.PairData,
+    source: str,
+    risk: rugcheck.RiskInfo | None,
+    verdict: str | None,
+    token_score: scoring.TokenScore,
 ) -> str:
     lines = [
         f"🆕 {pair.name} ({pair.symbol}) [{source}]",
-        f"Цена: ${format_price(pair.price_usd)}",
-        f"Ликвидность: {format_usd(pair.liquidity_usd)}",
-        f"Объём 24ч: {format_usd(pair.volume_h24)}",
+        f"Price: ${format_price(pair.price_usd)}",
+        f"Liquidity: {format_usd(pair.liquidity_usd)}",
+        f"24h volume: {format_usd(pair.volume_h24)}",
+        f"Token score: {token_score.value:.0f}/100",
     ]
     if risk is not None:
         lines.append(rugcheck.format_warning(risk))

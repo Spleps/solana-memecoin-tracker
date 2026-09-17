@@ -47,12 +47,12 @@ async def _poll_once(bot: Bot, cfg: Config) -> None:
 
 
 def _format_swap(wallet_address: str, event: "helius.SwapEvent") -> str:
-    action = "🟢 купил" if event.direction == "buy" else "🔴 продал"
+    action = "🟢 bought" if event.direction == "buy" else "🔴 sold"
     short_wallet = wallet_address[:4] + "…" + wallet_address[-4:]
     return (
         f"👛 {short_wallet} {action}\n"
-        f"Токен: {event.mint}\n"
-        f"Количество: {event.amount:,.2f}\n"
-        f"Источник: {event.source}\n"
+        f"Token: {event.mint}\n"
+        f"Amount: {event.amount:,.2f}\n"
+        f"Source: {event.source}\n"
         f"https://dexscreener.com/solana/{event.mint}"
     )

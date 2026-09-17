@@ -53,6 +53,30 @@ CREATE TABLE IF NOT EXISTS wallet_cursor (
     wallet_address TEXT PRIMARY KEY,
     last_signature TEXT
 );
+
+CREATE TABLE IF NOT EXISTS alert_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    token_address TEXT NOT NULL,
+    alert_type TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    sent_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS token_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_address TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    price_usd REAL,
+    liquidity_usd REAL,
+    volume_h24 REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_history_lookup
+ON alert_history(chat_id, token_address, alert_type, sent_at);
+
+CREATE INDEX IF NOT EXISTS idx_token_history_lookup
+ON token_history(token_address, recorded_at DESC);
 """
 
 
@@ -220,6 +244,42 @@ async def upsert_snapshot(
     await asyncio.to_thread(
         _upsert_snapshot_sync, db_path, token_address, price_usd, liquidity_usd, volume_h24, market_type
     )
+    await asyncio.to_thread(_append_history_sync, db_path, token_address, price_usd, liquidity_usd, volume_h24)
+
+
+def _append_history_sync(
+    db_path: Path,
+    token_address: str,
+    price_usd: float,
+    liquidity_usd: float,
+    volume_h24: float,
+) -> None:
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO token_history (token_address, recorded_at, price_usd, liquidity_usd, volume_h24)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (token_address, datetime.now(UTC).isoformat(), price_usd, liquidity_usd, volume_h24),
+        )
+
+
+def _get_token_history_sync(db_path: Path, token_address: str, limit: int = 10) -> list[sqlite3.Row]:
+    with _connect(db_path) as conn:
+        return conn.execute(
+            """
+            SELECT token_address, recorded_at, price_usd, liquidity_usd, volume_h24
+            FROM token_history
+            WHERE token_address = ?
+            ORDER BY recorded_at DESC
+            LIMIT ?
+            """,
+            (token_address, limit),
+        ).fetchall()
+
+
+async def get_token_history(db_path: Path, token_address: str, limit: int = 10) -> list[sqlite3.Row]:
+    return await asyncio.to_thread(_get_token_history_sync, db_path, token_address, limit)
 
 
 def _set_feed_enabled_sync(db_path: Path, chat_id: int, enabled: bool) -> None:
@@ -245,6 +305,44 @@ def _get_feed_subscribers_sync(db_path: Path) -> list[int]:
 
 async def get_feed_subscribers(db_path: Path) -> list[int]:
     return await asyncio.to_thread(_get_feed_subscribers_sync, db_path)
+
+
+def _get_bot_stats_sync(db_path: Path, chat_id: int | None = None) -> dict[str, int | bool]:
+    with _connect(db_path) as conn:
+        watched_tokens = conn.execute("SELECT COUNT(*) AS cnt FROM watchlist").fetchone()["cnt"]
+        unique_tokens = conn.execute("SELECT COUNT(DISTINCT token_address) AS cnt FROM watchlist").fetchone()["cnt"]
+        tracked_wallets = conn.execute("SELECT COUNT(*) AS cnt FROM tracked_wallets").fetchone()["cnt"]
+        feed_subscribers = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM subscribers WHERE feed_enabled = 1"
+        ).fetchone()["cnt"]
+
+        stats: dict[str, int | bool] = {
+            "watched_tokens": watched_tokens,
+            "unique_tokens": unique_tokens,
+            "tracked_wallets": tracked_wallets,
+            "feed_subscribers": feed_subscribers,
+        }
+        if chat_id is not None:
+            user_tokens = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM watchlist WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()["cnt"]
+            user_wallets = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM tracked_wallets WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()["cnt"]
+            feed_enabled = conn.execute(
+                "SELECT feed_enabled FROM subscribers WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()
+            stats["user_watched_tokens"] = user_tokens
+            stats["user_tracked_wallets"] = user_wallets
+            stats["feed_enabled"] = bool(feed_enabled and feed_enabled["feed_enabled"])
+        return stats
+
+
+async def get_bot_stats(db_path: Path, chat_id: int | None = None) -> dict[str, int | bool]:
+    return await asyncio.to_thread(_get_bot_stats_sync, db_path, chat_id)
 
 
 def _add_candidate_sync(db_path: Path, token_address: str, source: str, creator: str | None) -> None:
@@ -415,3 +513,48 @@ def _set_wallet_cursor_sync(db_path: Path, wallet_address: str, last_signature: 
 
 async def set_wallet_cursor(db_path: Path, wallet_address: str, last_signature: str) -> None:
     await asyncio.to_thread(_set_wallet_cursor_sync, db_path, wallet_address, last_signature)
+
+
+def _claim_alert_sync(
+    db_path: Path,
+    chat_id: int,
+    token_address: str,
+    alert_type: str,
+    fingerprint: str,
+    cooldown_s: float,
+) -> bool:
+    now = datetime.now(UTC)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT fingerprint, sent_at FROM alert_history
+            WHERE chat_id = ? AND token_address = ? AND alert_type = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (chat_id, token_address, alert_type),
+        ).fetchone()
+        if row:
+            elapsed = (now - datetime.fromisoformat(row["sent_at"])).total_seconds()
+            if elapsed < cooldown_s:
+                return False
+        conn.execute(
+            """
+            INSERT INTO alert_history(chat_id, token_address, alert_type, fingerprint, sent_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (chat_id, token_address, alert_type, fingerprint, now.isoformat()),
+        )
+        return True
+
+
+async def claim_alert(
+    db_path: Path,
+    chat_id: int,
+    token_address: str,
+    alert_type: str,
+    fingerprint: str,
+    cooldown_s: float,
+) -> bool:
+    return await asyncio.to_thread(
+        _claim_alert_sync, db_path, chat_id, token_address, alert_type, fingerprint, cooldown_s
+    )

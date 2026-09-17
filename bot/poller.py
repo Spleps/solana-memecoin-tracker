@@ -4,7 +4,7 @@ import sqlite3
 
 from aiogram import Bot
 
-from . import db, dexscreener, rugcheck
+from . import db, dexscreener, rugcheck, scoring
 from .config import Config
 from .handlers import format_price, format_usd
 
@@ -48,7 +48,7 @@ async def _poll_once(bot: Bot, cfg: Config) -> None:
         if old_market_type and new_market_type and old_market_type != new_market_type:
             watchers = await db.get_watchers(cfg.db_path, token_address)
             migration_text = (
-                f"🔀 {pair.name} ({pair.symbol}) мигрировал: {old_market_type} → {new_market_type}\n{pair.url}"
+                f"🔀 {pair.name} ({pair.symbol}) migrated: {old_market_type} → {new_market_type}\n{pair.url}"
             )
             for chat_id in watchers:
                 try:
@@ -62,8 +62,12 @@ async def _poll_once(bot: Bot, cfg: Config) -> None:
 
         if watchers is None:
             watchers = await db.get_watchers(cfg.db_path, token_address)
-        text = _format_alert(pair, alerts)
+        text = _format_alert(pair, alerts, scoring.calculate_score(pair, risk))
         for chat_id in watchers:
+            if not await db.claim_alert(
+                cfg.db_path, chat_id, token_address, "metrics", "|".join(alerts), cfg.alert_cooldown_s
+            ):
+                continue
             try:
                 await bot.send_message(chat_id, text)
             except Exception:
@@ -81,24 +85,25 @@ def _check_alerts(cfg: Config, old: sqlite3.Row, pair: dexscreener.PairData) -> 
 
     price_change = _pct_change(old["price_usd"], pair.price_usd)
     if abs(price_change) >= cfg.price_alert_pct:
-        direction = "выросла" if price_change > 0 else "упала"
-        alerts.append(f"Цена {direction} на {price_change:+.1f}%")
+        direction = "increased" if price_change > 0 else "decreased"
+        alerts.append(f"Price {direction} by {price_change:+.1f}%")
 
     liq_change = _pct_change(old["liquidity_usd"], pair.liquidity_usd)
     if liq_change <= -cfg.liquidity_drop_pct:
-        alerts.append(f"⚠️ Ликвидность упала на {liq_change:.1f}% — возможен rug pull")
+        alerts.append(f"⚠️ Liquidity decreased by {liq_change:.1f}% — possible rug pull")
 
     vol_change = _pct_change(old["volume_h24"], pair.volume_h24)
     if vol_change >= cfg.volume_spike_pct:
-        alerts.append(f"Объём вырос на {vol_change:+.1f}%")
+        alerts.append(f"Volume increased by {vol_change:+.1f}%")
 
     return alerts
 
 
-def _format_alert(pair: dexscreener.PairData, alerts: list[str]) -> str:
+def _format_alert(pair: dexscreener.PairData, alerts: list[str], score: scoring.TokenScore) -> str:
     lines = [f"{pair.name} ({pair.symbol})", *alerts, ""]
-    lines.append(f"Цена: ${format_price(pair.price_usd)}")
-    lines.append(f"Ликвидность: {format_usd(pair.liquidity_usd)}")
-    lines.append(f"Объём 24ч: {format_usd(pair.volume_h24)}")
+    lines.append(f"Token score: {score.value:.0f}/100")
+    lines.append(f"Price: ${format_price(pair.price_usd)}")
+    lines.append(f"Liquidity: {format_usd(pair.liquidity_usd)}")
+    lines.append(f"24h volume: {format_usd(pair.volume_h24)}")
     lines.append(pair.url)
     return "\n".join(lines)

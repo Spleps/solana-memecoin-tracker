@@ -16,6 +16,7 @@ class RiskInfo:
     lp_locked_pct: float
     risk_names: list[str]
     freeze_authority: str | None
+    mint_authority: str | None
     rugged: bool
     market_type: str | None
 
@@ -50,6 +51,7 @@ async def get_risk(token_address: str) -> RiskInfo | None:
         lp_locked_pct=float(summary.get("lpLockedPct") or 0),
         risk_names=[r["name"] for r in risks if r.get("name")],
         freeze_authority=full.get("freezeAuthority"),
+        mint_authority=full.get("mintAuthority"),
         rugged=bool(full.get("rugged")),
         market_type=markets[0].get("marketType") if markets else None,
     )
@@ -58,17 +60,19 @@ async def get_risk(token_address: str) -> RiskInfo | None:
 def format_warning(risk: RiskInfo) -> str:
     lines = []
     if risk.rugged:
-        lines.append("⛔ RugCheck: уже помечен как раг")
+        lines.append("⛔ RugCheck: already marked as rugged")
     if risk.freeze_authority:
-        lines.append("🚫 Freeze authority включён — возможно НЕЛЬЗЯ продать")
+        lines.append("🚫 Freeze authority enabled — selling may be blocked")
+    if risk.mint_authority:
+        lines.append("⚠️ Mint authority enabled — token supply may be increased")
 
     if risk.score_normalised >= 60:
-        level = "🔴 высокий риск рага"
+        level = "🔴 high rug risk"
     elif risk.score_normalised >= 30:
-        level = "🟡 средний риск"
+        level = "🟡 medium risk"
     else:
-        level = "🟢 низкий риск"
-    lines.append(f"Риск: {level} (score {risk.score_normalised:.0f}/100, LP locked {risk.lp_locked_pct:.0f}%)")
+        level = "🟢 low risk"
+    lines.append(f"Risk: {level} (score {risk.score_normalised:.0f}/100, LP locked {risk.lp_locked_pct:.0f}%)")
 
     if risk.risk_names:
         lines.append(", ".join(risk.risk_names[:3]))

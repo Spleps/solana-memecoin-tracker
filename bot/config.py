@@ -4,6 +4,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .validation import parse_allowed_chat_ids
+
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -26,12 +28,15 @@ class Config:
     llm_backend: str
     llm_api_key: str | None
     llm_api_model: str
+    allowed_telegram_ids: frozenset[int]
+    alert_cooldown_s: float
+    minimum_token_score: float
 
 
 def load_config() -> Config:
     bot_token = os.environ["BOT_TOKEN"]
     db_path = BASE_DIR / os.environ.get("DB_PATH", "data/tracker.db")
-    return Config(
+    cfg = Config(
         bot_token=bot_token,
         db_path=db_path,
         poll_interval_s=float(os.environ.get("POLL_INTERVAL_S", "60")),
@@ -47,4 +52,16 @@ def load_config() -> Config:
         llm_backend=os.environ.get("LLM_BACKEND", "cli"),
         llm_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
         llm_api_model=os.environ.get("LLM_API_MODEL", "claude-opus-5"),
+        allowed_telegram_ids=parse_allowed_chat_ids(os.environ.get("ALLOWED_TELEGRAM_IDS")),
+        alert_cooldown_s=float(os.environ.get("ALERT_COOLDOWN_S", "1800")),
+        minimum_token_score=float(os.environ.get("MINIMUM_TOKEN_SCORE", "0")),
     )
+    if cfg.poll_interval_s <= 0 or cfg.discovery_poll_interval_s <= 0 or cfg.wallet_poll_interval_s <= 0:
+        raise ValueError("Polling intervals must be greater than zero")
+    if not 0 <= cfg.minimum_token_score <= 100:
+        raise ValueError("MINIMUM_TOKEN_SCORE must be between 0 and 100")
+    if cfg.alert_cooldown_s < 0:
+        raise ValueError("ALERT_COOLDOWN_S cannot be negative")
+    if cfg.llm_backend not in {"cli", "api", "off"}:
+        raise ValueError("LLM_BACKEND must be cli, api, or off")
+    return cfg

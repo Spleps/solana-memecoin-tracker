@@ -1,87 +1,91 @@
 # Solana Memecoin Tracker
 
-Telegram-бот для отслеживания мемкоинов на Solana: личный вотчлист адресов токенов, алерты по цене/ликвидности/объёму. Данные — DexScreener public API (без ключа).
+An English Telegram bot for monitoring Solana tokens, liquidity, volume, new pairs, creator history, and wallet swaps.
 
-## Запуск
+The bot uses public DexScreener data, RugCheck, PumpPortal, and optionally Helius and Claude. It is an alerting and research tool, not financial advice.
+
+## Features
+
+- Per-user token watchlists with entry prices and P&L percentage.
+- Price, liquidity, volume, and DEX migration alerts.
+- New-pair discovery from PumpPortal and DexScreener.
+- RugCheck warnings for rug status, freeze authority, mint authority, and risk score.
+- Configurable token quality score from 0 to 100 with reason-based scoring.
+- Bot stats summary for watched tokens, tracked wallets, and feed status.
+- Recent price/liquidity/history snapshots and `/history` command.
+- Creator success history and known-creator alerts.
+- Optional Helius wallet swap tracking.
+- Alert cooldown and deduplication backed by SQLite.
+- Telegram user allowlist for private deployments.
+- Optional Claude CLI or Anthropic API verdicts.
+
+## Quick start
 
 ```bash
-cp .env.example .env   # вписать BOT_TOKEN от @BotFather
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+cp .env.example .env
+# edit .env and set BOT_TOKEN
 .venv/bin/python -m bot.main
 ```
 
-## Команды
+Windows PowerShell:
 
-- `/watch <адрес_токена> [цена_входа] [метка]` — добавить токен в отслеживание, опционально с ценой входа для P&L
-- `/entryprice <адрес_токена> <цена>` — задать/обновить цену входа задним числом
-- `/unwatch <адрес_токена>` — убрать
-- `/list` — список отслеживаемых токенов с последними метриками
-- `/feed on|off` — фид новых Solana-пар (pump.fun через PumpPortal + DexScreener profiles/boosts), которые набрали реальную ликвидность
-- `/topcreators` — кошельки-создатели с историей успешных запусков (см. ниже)
-- `/trackwallet <адрес> [метка]` — отслеживать сделки конкретного кошелька (нужен `HELIUS_API_KEY`)
-- `/untrackwallet <адрес>` — убрать кошелёк из отслеживания
-- `/wallets` — список отслеживаемых кошельков
-- `/help` — справка и текущие пороги алертов
+```powershell
+py -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+.venv\Scripts\python -m bot.main
+```
 
-## Пороги алертов (`.env`)
+## Commands
 
-- `PRICE_ALERT_PCT` — изменение цены за один цикл опроса (по умолчанию 15%)
-- `LIQUIDITY_DROP_PCT` — падение ликвидности, возможный rug pull (по умолчанию 30%)
-- `VOLUME_SPIKE_PCT` — рост объёма за 24ч (по умолчанию 100%)
-- `POLL_INTERVAL_S` — интервал опроса DexScreener (по умолчанию 60 сек)
+| Command | Description |
+|---|---|
+| `/watch <token_address> [entry_price] [label]` | Add a Solana token |
+| `/entryprice <token_address> <price>` | Set an entry price |
+| `/unwatch <token_address>` | Remove a token |
+| `/list` | Show watched tokens and P&L percentage |
+| `/history <token_address> [limit]` | Show recent price, liquidity, and volume history |
+| `/stats` | Show bot/user statistics and feed status |
+| `/feed on\|off` | Enable or disable new-pair alerts |
+| `/topcreators` | Show creators with successful launches |
+| `/trackwallet <wallet_address> [label]` | Track wallet swaps |
+| `/untrackwallet <wallet_address>` | Stop tracking a wallet |
+| `/wallets` | Show tracked wallets |
+| `/help` | Show help and thresholds |
 
-## Фид новых пар (`.env`)
+## Configuration
 
-Новые токены на pump.fun стартуют с почти одинаковой стартовой капитализацией бондинг-кривой (~28-30 SOL) — это не сигнал качества. Поэтому фид не алертит по факту создания токена, а ждёт, пока он наберёт реальную ликвидность на DEX:
+Copy `.env.example` to `.env`. Important settings:
 
-- `DISCOVERY_MIN_LIQUIDITY_USD` — порог ликвидности для алерта (по умолчанию $2000)
-- `DISCOVERY_POLL_INTERVAL_S` — как часто проверять кандидатов и опрашивать DexScreener profiles/boosts (по умолчанию 90 сек)
-- `CANDIDATE_MAX_AGE_MIN` — сколько минут ждать, прежде чем списать кандидата, который так и не набрал ликвидность (по умолчанию 60)
+- `BOT_TOKEN`: Telegram bot token.
+- `ALLOWED_TELEGRAM_IDS`: comma-separated Telegram IDs; leave empty only for a public bot.
+- `POLL_INTERVAL_S`: watchlist polling interval.
+- `PRICE_ALERT_PCT`, `LIQUIDITY_DROP_PCT`, `VOLUME_SPIKE_PCT`: alert thresholds.
+- `ALERT_COOLDOWN_S`: suppresses identical alerts during the cooldown window.
+- `MINIMUM_TOKEN_SCORE`: minimum score required for the new-pair feed.
+- `DISCOVERY_MIN_LIQUIDITY_USD`: minimum liquidity for discovered pairs.
+- `HELIUS_API_KEY`: enables wallet tracking.
+- `LLM_BACKEND`: `cli`, `api`, or `off`.
 
-## Создатели с историей (`.env`)
+All numeric settings are validated at startup. Existing SQLite databases are migrated in place; no tables are dropped.
 
-PumpPortal-события создания токена включают кошелёк создателя. Когда его токен графуирует (набирает ликвидность), кошелёк получает +1 к счётчику успешных запусков (`/topcreators`). Как только счётчик достигает `CREATOR_SUCCESS_THRESHOLD` (по умолчанию 2), новый запуск этого кошелька сразу шлётся подписчикам `/feed` как ранний сигнал — ещё до того, как токен наберёт ликвидность.
+## Data and limitations
 
-Это не PnL-трекинг трейдеров (для него нет бесплатного источника данных на Solana), а трек-рекорд создателей на основе уже собираемых бесплатных данных.
+The bot does not execute trades or custody funds. API data can be delayed, incomplete, rate-limited, or unavailable. A high token score is not a guarantee of safety or profitability. Always verify a token independently before trading.
 
-## Трекинг сделок кошелька (`.env`)
-
-`/trackwallet` показывает реальные покупки/продажи отслеживаемого кошелька через Helius Enhanced Transactions API (бесплатный тариф, нужна регистрация на helius.dev за ключом — без пополнения SOL, в отличие от PumpPortal-сделок).
-
-- `HELIUS_API_KEY` — ключ с helius.dev; без него `/trackwallet` отвечает, что функция не настроена
-- `WALLET_POLL_INTERVAL_S` — как часто проверять новые сделки по каждому отслеживаемому кошельку (по умолчанию 45 сек)
-
-## Sell-checker и миграции площадок
-
-Каждый вызов RugCheck (в `/watch` и `/feed`) теперь также проверяет `freezeAuthority` (владелец может заморозить твой кошелёк — не продашь) и флаг `rugged` (уже помечен как раг) — эти строки идут первыми в предупреждении, перед обычной оценкой риска.
-
-Для токенов из личного вотчлиста (`/watch`) бот дополнительно следит за тем, на какой площадке торгуется токен (`markets[0].marketType` из RugCheck — `pump_fun_amm`, `raydium`, `orca` и т.д.) и шлёт отдельный алерт при смене площадки (например, миграция с внутреннего AMM пампа на Raydium).
-
-## AI-вердикт (`.env`)
-
-В `/watch` и `/feed` добавляется короткий вердикт от Claude на основе уже собранных данных (цена, ликвидность, RugCheck-риски) — не новая информация, а синтез существующих сигналов в одну фразу.
-
-- `LLM_BACKEND` — `cli` (по умолчанию) или `api`
-  - `cli` — дёргает локальный `claude` CLI (`claude -p "..."`) по существующей подписке Claude Code, бесплатно. Требует, чтобы `claude` был установлен и авторизован на машине, где крутится бот.
-  - `api` — использует Anthropic API напрямую через `ANTHROPIC_API_KEY`
-- `ANTHROPIC_API_KEY` — нужен только при `LLM_BACKEND=api`
-- `LLM_API_MODEL` — модель для API-режима (по умолчанию `claude-opus-5`; можно указать более дешёвую, например `claude-haiku-4-5`, если вердикт будет генерироваться часто — это может быть заметно по цене на объёме)
-
-Если вызов LLM не удался (CLI недоступен, нет ключа, таймаут) — строка с вердиктом просто не добавляется, остальной алерт уходит как обычно.
-
-## systemd (автозапуск)
+## systemd
 
 ```ini
-# ~/.config/systemd/user/solana-tracker.service
 [Unit]
-Description=Solana Memecoin Tracker Bot
+Description=Solana Memecoin Tracker
 After=network-online.target
 
 [Service]
-WorkingDirectory=/home/rytm/Projects/solana-memecoin-tracker
-ExecStart=/home/rytm/Projects/solana-memecoin-tracker/.venv/bin/python -m bot.main
-EnvironmentFile=/home/rytm/Projects/solana-memecoin-tracker/.env
+WorkingDirectory=/home/user/solana-memecoin-tracker
+ExecStart=/home/user/solana-memecoin-tracker/.venv/bin/python -m bot.main
+EnvironmentFile=/home/user/solana-memecoin-tracker/.env
 Restart=on-failure
 
 [Install]
