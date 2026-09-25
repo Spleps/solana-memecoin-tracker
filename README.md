@@ -4,6 +4,16 @@ An English Telegram bot for monitoring Solana tokens, liquidity, volume, new pai
 
 The bot uses public DexScreener data, RugCheck, PumpPortal, and optionally Helius and Claude. It is an alerting and research tool, not financial advice.
 
+## What problem it solves
+
+New Solana tokens produce information across several services. The bot brings those observations
+into one Telegram workflow: a user can watch a token, receive changes in price or liquidity,
+inspect recent history, and review basic authority and creator signals without manually checking
+multiple dashboards.
+
+It is designed for monitoring and research. It does not sign transactions, buy or sell tokens,
+or hold private keys.
+
 ## Features
 
 - Per-user token watchlists with entry prices and P&L percentage.
@@ -55,6 +65,22 @@ Copy-Item .env.example .env
 | `/wallets` | Show tracked wallets |
 | `/help` | Show help and thresholds |
 
+## Example workflow
+
+```text
+/watch <token-address> 0.00042 frog
+```
+
+The bot stores the watch entry and can later report the current price, liquidity, volume and
+percentage change from the saved entry price. If liquidity falls beyond the configured threshold,
+the user receives a warning. A separate `/history <token-address> 10` request shows the latest
+stored snapshots rather than only the current API response.
+
+For discovery, enabling `/feed on` allows qualifying new pairs from the configured feed to be
+checked against liquidity and token-quality thresholds. A token with enabled freeze authority or
+an unfavourable RugCheck result is reported with those reasons instead of being silently treated
+as safe.
+
 ## Configuration
 
 Copy `.env.example` to `.env`. Important settings:
@@ -70,6 +96,17 @@ Copy `.env.example` to `.env`. Important settings:
 - `LLM_BACKEND`: `cli`, `api`, or `off`.
 
 All numeric settings are validated at startup. Existing SQLite databases are migrated in place; no tables are dropped.
+
+## Data flow
+
+1. A scheduled poller fetches public market and token metadata.
+2. Normalized observations are stored in SQLite.
+3. Rule-based checks compare the new observation with thresholds and previous snapshots.
+4. Cooldowns and deduplication prevent repeated copies of the same alert.
+5. Telegram commands expose watchlists, history, creator summaries and feed status.
+
+Optional Helius wallet tracking and Claude-backed verdicts are disabled unless their configuration
+is supplied. The core tracker remains usable with the public data providers alone.
 
 ## Data and limitations
 
